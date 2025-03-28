@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>MyShop - Main</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <div class="page-container">
+
+    <!-- HEADER SECTION -->
+    <header class="site-header">
+      <div class="brand-logo">
+        <h1>MyShop</h1>
+      </div>
+      
+      <!-- MAIN NAV (Will contain categories) -->
+      <nav class="main-nav">
+        <ul>
+          <li><a href="index.html">Home</a></li>
+          <!-- Categories will be loaded here -->
+        </ul>
+      </nav>
+
+      <!-- CART (HOVER TO OPEN) -->
+      <div class="cart-wrapper">
+        <div class="cart-summary" id="cart-summary">
+          Shopping List: $0
+        </div>
+        <div class="cart-details" id="cart-details">
+          <h2>Your Cart</h2>
+          <ul id="cart-items">
+            <!-- This will be dynamically populated via scripts.js -->
+          </ul>
+          <p class="cart-total">Total: $<span id="cart-total">0</span></p>
+          <button class="checkout-btn">Checkout</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- MAIN CONTENT AREA -->
+    <main class="content-wrap">
+
+      <!-- HERO SECTION -->
+      <section class="hero">
+        <div class="hero-text">
+          <h2>Welcome to MyShop</h2>
+          <p>Your one-stop store for everything!</p>
+        </div>
+      </section>
+
+      <!-- BREADCRUMB -->
+      <nav class="breadcrumb">
+        <a href="index.html">Home</a>
+      </nav>
+
+      <!-- MAIN CONTENT AREA -->
+      <div class="main-container">
+        <!-- SIDEBAR -->
+        <aside class="categories">
+          <h2>Categories</h2>
+          <ul>
+            <!-- Categories will be loaded dynamically -->
+            <li>Loading categories...</li>
+          </ul>
+        </aside>
+
+        <!-- PRODUCTS GRID -->
+        <section class="products-grid">
+          <!-- Products will be loaded dynamically -->
+          <p>Loading products...</p>
+        </section>
+      </div> <!-- end main-container -->
+    </main> <!-- end content-wrap -->
+
+    <!-- FOOTER -->
+    <footer class="site-footer">
+      <p>© 2025 MyShop Inc.</p>
+    </footer>
+
+  </div> <!-- end page-container -->
+
+  <!-- Link to JavaScript file -->
+  <script src="scripts.js" defer></script>
+  <script src="frontend.js" defer></script>
+</body>
+</html>

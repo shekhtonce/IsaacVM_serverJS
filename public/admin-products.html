@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Manage Products - MyShop Admin</title>
+  <link rel="stylesheet" href="/admin-styles.css">
+</head>
+<body>
+  <div class="admin-container">
+    <header class="admin-header">
+      <h1>MyShop Admin Panel</h1>
+      <nav class="admin-nav">
+        <ul>
+          <li><a href="/admin.html">Dashboard</a></li>
+          <li><a href="/admin-categories.html">Categories</a></li>
+          <li><a href="/admin-products.html" class="active">Products</a></li>
+          <li><a href="/" target="_blank">View Shop</a></li>
+        </ul>
+      </nav>
+    </header>
+
+    <main class="admin-content">
+      <section class="admin-section">
+        <h2>Manage Products</h2>
+        
+        <!-- Add Product Form -->
+        <div class="admin-form-container">
+          <h3>Add New Product</h3>
+          <form id="add-product-form" class="admin-form" action="/api/products" method="POST" enctype="multipart/form-data">
+            <div class="form-group">
+              <label for="product-category">Category:</label>
+              <select id="product-category" name="catid" required>
+                <option value="">Select a category</option>
+                <!-- Categories will be loaded here via JavaScript -->
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="product-name">Product Name:</label>
+              <input type="text" id="product-name" name="name" required 
+                     pattern="[A-Za-z0-9\s]+" title="Alphanumeric characters and spaces only">
+            </div>
+            <div class="form-group">
+              <label for="product-price">Price ($):</label>
+              <input type="number" id="product-price" name="price" step="0.01" min="0.01" required>
+            </div>
+            <div class="form-group">
+              <label for="product-description">Description:</label>
+              <textarea id="product-description" name="description" rows="4" required></textarea>
+            </div>
+            <div class="form-group">
+              <label for="product-image">Product Image:</label>
+              <input type="file" id="product-image" name="image" accept="image/jpeg,image/png,image/gif" required>
+              <small>Max file size: 10MB. Accepted formats: JPG, PNG, GIF</small>
+            </div>
+            <button type="submit" class="btn btn-primary">Add Product</button>
+          </form>
+        </div>
+
+        <!-- Products Table -->
+        <div class="admin-table-container">
+          <h3>Existing Products</h3>
+          <table class="admin-table" id="products-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Image</th>
+                <th>Name</th>
+                <th>Category</th>
+                <th>Price</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="products-list">
+              <!-- Products will be loaded here via JavaScript -->
+              <tr>
+                <td colspan="6">Loading products...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Edit Product Modal -->
+        <div id="edit-product-modal" class="modal">
+          <div class="modal-content">
+            <span class="close">&times;</span>
+            <h3>Edit Product</h3>
+            <form id="edit-product-form" class="admin-form" enctype="multipart/form-data">
+              <input type="hidden" id="edit-product-id" name="pid">
+              <div class="form-group">
+                <label for="edit-product-category">Category:</label>
+                <select id="edit-product-category" name="catid" required>
+                  <!-- Categories will be loaded here via JavaScript -->
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="edit-product-name">Product Name:</label>
+                <input type="text" id="edit-product-name" name="name" required 
+                       pattern="[A-Za-z0-9\s]+" title="Alphanumeric characters and spaces only">
+              </div>
+              <div class="form-group">
+                <label for="edit-product-price">Price ($):</label>
+                <input type="number" id="edit-product-price" name="price" step="0.01" min="0.01" required>
+              </div>
+              <div class="form-group">
+                <label for="edit-product-description">Description:</label>
+                <textarea id="edit-product-description" name="description" rows="4" required></textarea>
+              </div>
+              <div class="form-group">
+                <label for="edit-product-image">Product Image:</label>
+                <div id="current-image-container">
+                  <img id="current-product-image" src="" alt="Current product image" height="100">
+                  <p>Current image</p>
+                </div>
+                <input type="file" id="edit-product-image" name="image" accept="image/jpeg,image/png,image/gif">
+                <small>Max file size: 10MB. Leave empty to keep current image.</small>
+              </div>
+              <button type="submit" class="btn btn-primary">Update Product</button>
+            </form>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="admin-footer">
+      <p>&copy; 2025 MyShop Admin</p>
+    </footer>
+  </div>
+  <script src="/admin-scripts.js"></script>
+</body>
+</html>

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Manage Categories - MyShop Admin</title>
+  <link rel="stylesheet" href="/admin-styles.css">
+</head>
+<body>
+  <div class="admin-container">
+    <header class="admin-header">
+      <h1>MyShop Admin Panel</h1>
+      <nav class="admin-nav">
+        <ul>
+          <li><a href="admin.html">Dashboard</a></li>
+          <li><a href="/admin-categories.html" class="active">Categories</a></li>
+          <li><a href="/admin-products.html">Products</a></li>
+          <li><a href="/" target="_blank">View Shop</a></li>
+        </ul>
+      </nav>
+    </header>
+
+    <main class="admin-content">
+      <section class="admin-section">
+        <h2>Manage Categories</h2>
+        
+        <!-- Add Category Form -->
+        <div class="admin-form-container">
+          <h3>Add New Category</h3>
+          <form id="add-category-form" class="admin-form" action="/api/categories" method="POST">
+            <div class="form-group">
+              <label for="category-name">Category Name:</label>
+              <input type="text" id="category-name" name="name" required 
+                     pattern="[A-Za-z0-9\s]+" title="Alphanumeric characters and spaces only">
+            </div>
+            <button type="submit" class="btn btn-primary">Add Category</button>
+          </form>
+        </div>
+
+        <!-- Categories Table -->
+        <div class="admin-table-container">
+          <h3>Existing Categories</h3>
+          <table class="admin-table" id="categories-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="categories-list">
+              <!-- Categories will be loaded here via JavaScript -->
+              <tr>
+                <td colspan="3">Loading categories...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Edit Category Modal -->
+        <div id="edit-category-modal" class="modal">
+          <div class="modal-content">
+            <span class="close">&times;</span>
+            <h3>Edit Category</h3>
+            <form id="edit-category-form" class="admin-form">
+              <input type="hidden" id="edit-category-id" name="catid">
+              <div class="form-group">
+                <label for="edit-category-name">Category Name:</label>
+                <input type="text" id="edit-category-name" name="name" required 
+                       pattern="[A-Za-z0-9\s]+" title="Alphanumeric characters and spaces only">
+              </div>
+              <button type="submit" class="btn btn-primary">Update Category</button>
+            </form>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="admin-footer">
+      <p>&copy; 2025 MyShop Admin</p>
+    </footer>
+  </div>
+  <script src="/admin-scripts.js"></script>
+</body>
+</html>

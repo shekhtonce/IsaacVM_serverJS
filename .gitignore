@@ -1,5 +1,6 @@
 node_modules/
 uploads/
+myshop.db
 package-lock.json
 package.json
 *.log

@@ -4,6 +4,8 @@ const path = require('path');
 const multer = require('multer');
 const fs = require('fs');
 const sqlite3 = require('better-sqlite3');
+const crypto = require('crypto');
+const cookieParser = require('cookie-parser');
 
 // Create Express app
 const app = express();
@@ -42,12 +44,104 @@ function initializeDatabase() {
     )
   `);
 
+  // Create users table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      userid INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT NOT NULL UNIQUE,
+      password TEXT NOT NULL,
+      salt TEXT NOT NULL,
+      is_admin INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Create sessions table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      session_id TEXT PRIMARY KEY,
+      userid INTEGER NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      expires_at TIMESTAMP NOT NULL,
+      FOREIGN KEY (userid) REFERENCES users(userid)
+    )
+  `);
+
+  // Create session_data table for storing CSRF tokens
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS session_data (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
+      UNIQUE(session_id, key)
+    )
+  `);
+
   console.log('Database initialized successfully');
+}
+
+// Generate a random salt
+function generateSalt(length = 16) {
+  return crypto.randomBytes(length).toString('hex');
+}
+
+// Hash a password with the given salt using PBKDF2
+function hashPassword(password, salt) {
+  return new Promise((resolve, reject) => {
+    crypto.pbkdf2(password, salt, 10000, 64, 'sha512', (err, derivedKey) => {
+      if (err) reject(err);
+      resolve(derivedKey.toString('hex'));
+    });
+  });
+}
+
+// Verify a password against a stored hash
+async function verifyPassword(password, storedHash, salt) {
+  const hash = await hashPassword(password, salt);
+  return hash === storedHash;
+}
+
+// Generate a secure random session token
+function generateSessionToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+// Create initial admin and regular users if none exist
+async function setupInitialUsers() {
+  try {
+    // Check if any users exist
+    const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get().count;
+    
+    if (userCount === 0) {
+      // Create admin user
+      const adminSalt = generateSalt();
+      const adminPassword = await hashPassword('adminabc', adminSalt);
+      
+      db.prepare(
+        'INSERT INTO users (email, password, salt, is_admin) VALUES (?, ?, ?, ?)'
+      ).run('admin@example.com', adminPassword, adminSalt, 1);
+      
+      // Create regular user
+      const userSalt = generateSalt();
+      const userPassword = await hashPassword('user123', userSalt);
+      
+      db.prepare(
+        'INSERT INTO users (email, password, salt, is_admin) VALUES (?, ?, ?, ?)'
+      ).run('user@example.com', userPassword, userSalt, 0);
+      
+      console.log('Initial users created successfully');
+    }
+  } catch (err) {
+    console.error('Error setting up initial users:', err);
+  }
 }
 
 // Initialize database
 try {
   initializeDatabase();
+  setupInitialUsers().catch(err => console.error('Error setting up users:', err));
 } catch (err) {
   console.error('Error initializing database:', err);
 }
@@ -55,7 +149,7 @@ try {
 // Middleware to parse form data
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
-
+app.use(cookieParser());
 // Set up multer for file uploads
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -112,8 +206,101 @@ app.get('/admin', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
+app.get('/admin-categories', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin-categories.html'));
+});
+
+app.get('/admin-products', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin-products.html'));
+});
+
+// Add route to serve the login page
+app.get('/login', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'login.html'));
+});
+
 // Upload directory for product images
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Authentication middleware
+function isAuthenticated(req, res, next) {
+  const sessionId = req.cookies.session_id;
+  
+  if (!sessionId) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  
+  try {
+    // Get session from database
+    const session = db.prepare(
+      'SELECT s.*, u.is_admin FROM sessions s JOIN users u ON s.userid = u.userid WHERE s.session_id = ? AND s.expires_at > datetime(\'now\')' // Use single quotes around 'now'
+    ).get(sessionId);
+    
+    if (!session) {
+      // Session expired or not found
+      res.clearCookie('session_id');
+      return res.status(401).json({ error: 'Session expired or invalid' });
+    }
+    
+    // Add user information to request object
+    req.user = {
+      userid: session.userid,
+      is_admin: session.is_admin === 1
+    };
+    
+    next();
+  } catch (err) {
+    console.error('Authentication error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// Admin access middleware
+function isAdmin(req, res, next) {
+  if (!req.user || !req.user.is_admin) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  next();
+}
+
+// CSRF Protection middleware
+function validateCSRF(req, res, next) {
+  // For GET requests, no CSRF validation is needed
+  if (req.method === 'GET') {
+    return next();
+  }
+  
+  // Get the CSRF token from request body or headers
+  const csrfToken = req.body.csrf_token || req.headers['x-csrf-token'];
+  
+  // If no CSRF token is provided, reject the request
+  if (!csrfToken) {
+    return res.status(403).json({ error: 'CSRF token is required' });
+  }
+  
+  // For APIs that require authentication, check if the CSRF token matches the session
+  if (req.cookies.session_id) {
+    const session = db.prepare('SELECT * FROM sessions WHERE session_id = ?').get(req.cookies.session_id);
+    
+    if (session) {
+      // Check if this session has a csrf_token stored
+      const sessionCSRF = db.prepare('SELECT value FROM session_data WHERE session_id = ? AND key = \'csrf_token\'').get(session.session_id); // Use single quotes around 'csrf_token'
+      
+      // If no CSRF token is stored for this session, store it
+      if (!sessionCSRF) {
+        db.prepare('INSERT INTO session_data (session_id, key, value) VALUES (?, ?, ?)').run(
+          session.session_id, 'csrf_token', csrfToken
+        );
+      } 
+      // If a CSRF token is stored, validate it
+      else if (sessionCSRF.value !== csrfToken) {
+        return res.status(403).json({ error: 'Invalid CSRF token' });
+      }
+    }
+  }
+  
+  next();
+}
 
 // Helper function to validate input
 const validateInput = (input, type) => {
@@ -131,6 +318,175 @@ const validateInput = (input, type) => {
       return true;
   }
 };
+
+// =====================================================
+// AUTHENTICATION API ENDPOINTS
+// =====================================================
+
+// =====================================================
+// PROTECT ADMIN ROUTES
+// =====================================================
+
+// Apply authentication middleware to admin routes
+// This will check if the user is logged in and has admin rights
+app.use(['/api/categories', '/api/products', '/api/stats'], isAuthenticated, isAdmin);
+// Apply CSRF validation to all sensitive routes
+app.use(['/api/categories', '/api/products', '/api/auth/change-password', '/api/auth/logout'], validateCSRF);
+
+// =====================================================
+// END OF ROUTE PROTECTION
+// =====================================================
+
+// Login endpoint with CSRF validation
+app.post('/api/auth/login', validateCSRF, async (req, res) => {
+  try {
+    const { email, password, csrf_token } = req.body;
+    
+    // Validate inputs
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
+    }
+    
+    // Find user by email
+    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+    
+    if (!user) {
+      // Don't reveal that the user doesn't exist
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+    
+    // Verify password
+    const passwordMatch = await verifyPassword(password, user.password, user.salt);
+    
+    if (!passwordMatch) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+    
+    // Create new session
+    const sessionId = generateSessionToken();
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 1); // 1 day expiration
+    
+    // Delete any existing sessions for this user (for session rotation)
+    db.prepare('DELETE FROM sessions WHERE userid = ?').run(user.userid);
+    
+    // Insert new session
+    db.prepare(
+      'INSERT INTO sessions (session_id, userid, expires_at) VALUES (?, ?, ?)'
+    ).run(sessionId, user.userid, expiresAt.toISOString());
+    
+    // Store CSRF token with session
+    if (csrf_token) {
+      db.prepare('INSERT INTO session_data (session_id, key, value) VALUES (?, ?, ?)').run(
+        sessionId, 'csrf_token', csrf_token
+      );
+    }
+    
+    // Set session cookie
+    res.cookie('session_id', sessionId, {
+      httpOnly: true,
+      secure: true, // For HTTPS
+      expires: expiresAt,
+      sameSite: 'strict'
+    });
+    
+    // Return success response with user info (excluding sensitive data)
+    res.json({
+      success: true,
+      user: {
+        email: user.email,
+        is_admin: user.is_admin === 1
+      }
+    });
+  } catch (err) {
+    console.error('Login error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Logout endpoint
+app.post('/api/auth/logout', isAuthenticated, (req, res) => {
+  try {
+    const sessionId = req.cookies.session_id;
+    
+    // Delete session from database
+    db.prepare('DELETE FROM sessions WHERE session_id = ?').run(sessionId);
+    
+    // Clear cookie
+    res.clearCookie('session_id');
+    
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Logout error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get current user info
+app.get('/api/auth/user', isAuthenticated, (req, res) => {
+  try {
+    const user = db.prepare('SELECT email, is_admin FROM users WHERE userid = ?').get(req.user.userid);
+    
+    res.json({
+      email: user.email,
+      is_admin: user.is_admin === 1
+    });
+  } catch (err) {
+    console.error('Error fetching user:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Change password endpoint
+app.post('/api/auth/change-password', isAuthenticated, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    
+    // Validate inputs
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Current password and new password are required' });
+    }
+    
+    // Password complexity check
+    if (newPassword.length < 8) {
+      return res.status(400).json({ error: 'New password must be at least 8 characters long' });
+    }
+    
+    // Get user from database
+    const user = db.prepare('SELECT * FROM users WHERE userid = ?').get(req.user.userid);
+    
+    // Verify current password
+    const passwordMatch = await verifyPassword(currentPassword, user.password, user.salt);
+    
+    if (!passwordMatch) {
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+    
+    // Generate new salt and hash for new password
+    const newSalt = generateSalt();
+    const newHash = await hashPassword(newPassword, newSalt);
+    
+    // Update password in database
+    db.prepare(
+      'UPDATE users SET password = ?, salt = ? WHERE userid = ?'
+    ).run(newHash, newSalt, user.userid);
+    
+    // Delete all sessions for this user
+    db.prepare('DELETE FROM sessions WHERE userid = ?').run(user.userid);
+    
+    // Clear session cookie
+    res.clearCookie('session_id');
+    
+    res.json({ success: true, message: 'Password changed successfully. Please log in again.' });
+  } catch (err) {
+    console.error('Change password error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// =====================================================
+// END OF AUTHENTICATION API ENDPOINTS
+// =====================================================
 
 // API Routes
 // Frontend API Endpoints

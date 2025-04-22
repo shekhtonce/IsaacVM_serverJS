@@ -23,6 +23,12 @@
         </ul>
       </nav>
 
+      <!-- USER INFO AND LOGIN -->
+      <div class="user-controls">
+        <div id="user-greeting">Hi guest</div>
+        <button id="login-button" class="login-btn">Login</button>
+      </div>
+
       <!-- CART (HOVER TO OPEN) -->
       <div class="cart-wrapper">
         <div class="cart-summary" id="cart-summary">
@@ -79,11 +85,24 @@
       <p>© 2025 MyShop Inc.</p>
     </footer>
 
+    <!-- User modals -->
+    <div id="user-menu-modal" class="modal" style="display: none;">
+      <div class="modal-content">
+        <span class="close">&times;</span>
+        <h2>User Menu</h2>
+        <button id="change-password-btn">Change Password</button>
+        <button id="logout-btn">Logout</button>
+      </div>
+    </div>
+
   </div> <!-- end page-container -->
 
-  <!-- Link to JavaScript file -->
+  <!-- Link to JavaScript files -->
+  <script src="sanitize.js" defer></script>
+  <script src="csrf-utils.js" defer></script>
   <script src="cart.js" defer></script>
   <script src="scripts.js" defer></script>
   <script src="frontend.js" defer></script>
+  <script src="auth.js" defer></script>
 </body>
 </html>

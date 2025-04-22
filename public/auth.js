@@ -1,16 +1,31 @@
-// Check if user is logged in
-async function checkAuthentication() {
+// Functions for user authentication on the frontend
+document.addEventListener('DOMContentLoaded', () => {
+    // Check user authentication status
+    checkUserAuth();
+    
+    // Set up event listeners
+    setupAuthEventListeners();
+});
+
+// Check if user is logged in and update UI accordingly
+async function checkUserAuth() {
     try {
-        // First try to get the user info from localStorage
+        // Check if we have user info in localStorage
         const storedUser = localStorage.getItem('user');
+        const userGreeting = document.getElementById('user-greeting');
+        const loginButton = document.getElementById('login-button');
         
         if (!storedUser) {
-            // No stored user, redirect to login page
-            window.location.href = '/login.html';
+            // Not logged in
+            if (userGreeting) userGreeting.textContent = 'Hi guest';
+            if (loginButton) {
+                loginButton.textContent = 'Login';
+                loginButton.onclick = () => window.location.href = '/login.html';
+            }
             return;
         }
         
-        // Verify with the server that the session is still valid
+        // We have stored user, verify with server
         const response = await fetch('/api/auth/user', {
             method: 'GET',
             headers: {
@@ -19,45 +34,79 @@ async function checkAuthentication() {
         });
         
         if (!response.ok) {
-            // Session invalid, redirect to login page
+            // Session invalid, clear localStorage
             localStorage.removeItem('user');
-            window.location.href = '/login.html';
+            if (userGreeting) userGreeting.textContent = 'Hi guest';
+            if (loginButton) {
+                loginButton.textContent = 'Login';
+                loginButton.onclick = () => window.location.href = '/login.html';
+            }
             return;
         }
         
-        // Session is valid, update user info display
+        // Session is valid
         const user = await response.json();
-        updateUserDisplay(user);
+        
+        // Update user data in localStorage
+        localStorage.setItem('user', JSON.stringify(user));
+        
+        // Update UI
+        if (userGreeting) userGreeting.textContent = `Hi ${user.email}`;
+        if (loginButton) {
+            loginButton.textContent = 'Account';
+            loginButton.onclick = showUserMenu;
+        }
         
     } catch (error) {
-        console.error('Authentication check error:', error);
-        // On error, redirect to login
-        window.location.href = '/login.html';
+        console.error('Auth check error:', error);
+        // Fallback to guest user on error
+        const userGreeting = document.getElementById('user-greeting');
+        const loginButton = document.getElementById('login-button');
+        
+        if (userGreeting) userGreeting.textContent = 'Hi guest';
+        if (loginButton) {
+            loginButton.textContent = 'Login';
+            loginButton.onclick = () => window.location.href = '/login.html';
+        }
     }
 }
 
-// Update the UI to show the logged-in user
-function updateUserDisplay(user) {
-    const headerElement = document.querySelector('header');
+// Set up event listeners
+function setupAuthEventListeners() {
+    // Event listener for the close button on the user menu modal
+    const closeButtons = document.querySelectorAll('.modal .close');
+    closeButtons.forEach(button => {
+        button.addEventListener('click', () => {
+            const modal = button.closest('.modal');
+            if (modal) modal.style.display = 'none';
+        });
+    });
     
-    // If user info section doesn't exist, create it
-    if (!document.getElementById('user-info')) {
-        const userInfoDiv = document.createElement('div');
-        userInfoDiv.id = 'user-info';
-        userInfoDiv.className = 'user-info';
-        userInfoDiv.innerHTML = `
-            <span>Logged in as: <strong>${user.email}</strong></span>
-            <button id="logout-btn">Logout</button>
-            <button id="change-password-btn">Change Password</button>
-        `;
-        
-        headerElement.appendChild(userInfoDiv);
-        
-        // Add logout button event listener
-        document.getElementById('logout-btn').addEventListener('click', handleLogout);
-        
-        // Add change password button event listener
-        document.getElementById('change-password-btn').addEventListener('click', showChangePasswordModal);
+    // Close modal when clicking outside of it
+    window.addEventListener('click', (event) => {
+        const modals = document.querySelectorAll('.modal');
+        modals.forEach(modal => {
+            if (event.target === modal) {
+                modal.style.display = 'none';
+            }
+        });
+    });
+    
+    // Set up logout and change password buttons (they'll be created when user menu is shown)
+    document.addEventListener('click', (event) => {
+        if (event.target.id === 'logout-btn') {
+            handleLogout();
+        } else if (event.target.id === 'change-password-btn') {
+            showChangePasswordModal();
+        }
+    });
+}
+
+// Show user menu
+function showUserMenu() {
+    const userMenuModal = document.getElementById('user-menu-modal');
+    if (userMenuModal) {
+        userMenuModal.style.display = 'block';
     }
 }
 
@@ -76,10 +125,11 @@ async function handleLogout() {
             body: JSON.stringify({ csrf_token: csrfToken })
         });
         
-        // Clear localStorage and redirect to login page
+        // Clear localStorage
         localStorage.removeItem('user');
-        localStorage.removeItem('csrf_token');
-        window.location.href = '/login.html';
+        
+        // Refresh the page
+        window.location.reload();
         
     } catch (error) {
         console.error('Logout error:', error);
@@ -89,70 +139,74 @@ async function handleLogout() {
 
 // Show change password modal
 function showChangePasswordModal() {
-    // Create modal HTML
-    const modalHtml = `
-        <div id="password-modal" class="modal">
-            <div class="modal-content">
-                <span class="close">&times;</span>
-                <h2>Change Password</h2>
-                <div id="password-error" class="error-message"></div>
-                <form id="change-password-form">
-                    <input type="hidden" id="password-csrf-token" name="csrf_token">
-                    <div class="form-group">
-                        <label for="current-password">Current Password</label>
-                        <input type="password" id="current-password" name="currentPassword" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="new-password">New Password</label>
-                        <input type="password" id="new-password" name="newPassword" required minlength="8">
-                        <small>Password must be at least 8 characters long</small>
-                    </div>
-                    <div class="form-group">
-                        <label for="confirm-password">Confirm New Password</label>
-                        <input type="password" id="confirm-password" name="confirmPassword" required>
-                    </div>
-                    <button type="submit">Change Password</button>
-                </form>
-            </div>
-        </div>
-    `;
+    // Hide user menu modal
+    const userMenuModal = document.getElementById('user-menu-modal');
+    if (userMenuModal) {
+        userMenuModal.style.display = 'none';
+    }
     
-    // Add modal to the page
-    const modalDiv = document.createElement('div');
-    modalDiv.innerHTML = modalHtml;
-    document.body.appendChild(modalDiv);
+    // Create modal HTML if it doesn't exist
+    if (!document.getElementById('password-modal')) {
+        const modalHtml = `
+            <div id="password-modal" class="modal">
+                <div class="modal-content">
+                    <span class="close">&times;</span>
+                    <h2>Change Password</h2>
+                    <div id="password-error" class="error-message"></div>
+                    <form id="change-password-form">
+                        <input type="hidden" id="password-csrf-token" name="csrf_token">
+                        <div class="form-group">
+                            <label for="current-password">Current Password</label>
+                            <input type="password" id="current-password" name="currentPassword" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="new-password">New Password</label>
+                            <input type="password" id="new-password" name="newPassword" required minlength="8">
+                            <small>Password must be at least 8 characters long</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="confirm-password">Confirm New Password</label>
+                            <input type="password" id="confirm-password" name="confirmPassword" required>
+                        </div>
+                        <button type="submit">Change Password</button>
+                    </form>
+                </div>
+            </div>
+        `;
+        
+        // Add modal to the page
+        const modalDiv = document.createElement('div');
+        modalDiv.innerHTML = modalHtml;
+        document.body.appendChild(modalDiv);
+        
+        // Set up form submission handler
+        const form = document.getElementById('change-password-form');
+        if (form) {
+            form.addEventListener('submit', handlePasswordChange);
+        }
+    }
     
     // Get CSRF token from localStorage and set it in the form
     const csrfToken = localStorage.getItem('csrf_token');
-    document.getElementById('password-csrf-token').value = csrfToken;
-    
-    // Set up event listeners
-    const modal = document.getElementById('password-modal');
-    const closeBtn = modal.querySelector('.close');
-    const form = document.getElementById('change-password-form');
+    const csrfInput = document.getElementById('password-csrf-token');
+    if (csrfInput) csrfInput.value = csrfToken;
     
     // Show the modal
-    modal.style.display = 'block';
-    
-    // Close the modal when the user clicks on the 'x'
-    closeBtn.addEventListener('click', () => {
-        modal.style.display = 'none';
-        document.body.removeChild(modalDiv);
-    });
-    
-    // Close the modal when the user clicks outside of it
-    window.addEventListener('click', (event) => {
-        if (event.target === modal) {
-            modal.style.display = 'none';
-            document.body.removeChild(modalDiv);
+    const passwordModal = document.getElementById('password-modal');
+    if (passwordModal) {
+        passwordModal.style.display = 'block';
+        
+        // Set up close button event
+        const closeBtn = passwordModal.querySelector('.close');
+        if (closeBtn) {
+            closeBtn.addEventListener('click', () => {
+                passwordModal.style.display = 'none';
+            });
         }
-    });
-    
-    // Handle form submission
-    form.addEventListener('submit', handlePasswordChange);
+    }
 }
 
-// Handle password change submission
+// Handle password change
 async function handlePasswordChange(event) {
     event.preventDefault();
     
@@ -201,6 +255,3 @@ async function handlePasswordChange(event) {
         errorElement.style.display = 'block';
     }
 }
-
-// Initialize authentication check on page load
-document.addEventListener('DOMContentLoaded', checkAuthentication);

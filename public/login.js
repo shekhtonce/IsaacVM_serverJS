@@ -39,8 +39,12 @@ async function handleLogin(event) {
             // Store user info in localStorage
             localStorage.setItem('user', JSON.stringify(data.user));
             
-            // Redirect to admin panel
-            window.location.href = '/admin';
+            // Redirect based on user role
+            if (data.user.is_admin) {
+                window.location.href = '/admin';
+            } else {
+                window.location.href = '/index.html';
+            }
         } else {
             // Display error message
             const errorMessage = document.getElementById('error-message');

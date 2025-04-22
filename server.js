@@ -769,7 +769,7 @@ app.post('/api/auth/login', validateCSRF, async (req, res) => {
     // Create new session
     const sessionId = generateSessionToken();
     const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 1); // 1 day expiration
+    expiresAt.setDate(expiresAt.getDate() + 3); // 3 days expiration (changed from 1 day)
     
     // Delete any existing sessions for this user (for session rotation)
     executeQuery('DELETE FROM sessions WHERE userid = ?', [user.userid]);
@@ -788,7 +788,7 @@ app.post('/api/auth/login', validateCSRF, async (req, res) => {
       );
     }
     
-    // Set session cookie
+    // Set session cookie with 3-day expiration
     res.cookie('session_id', sessionId, {
       httpOnly: true,
       secure: true, // For HTTPS

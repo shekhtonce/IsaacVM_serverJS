@@ -1,4 +1,9 @@
 document.addEventListener('DOMContentLoaded', () => {
+  // Initialize CSRF protection for all forms
+  if (window.csrfUtils) {
+    window.csrfUtils.addTokenToForms();
+  }
+
   // Common function to show error messages
   const showError = (message) => {
     alert(message);
@@ -167,30 +172,38 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     
-    let html = '';
-    
-    categories.forEach(category => {
-      html += `
-        <tr>
-          <td>${category.catid}</td>
-          <td>${category.name}</td>
-          <td class="table-actions">
-            <button class="btn btn-edit edit-category-btn" 
-                    data-id="${category.catid}" 
-                    data-name="${category.name}">
-              Edit
-            </button>
-            <button class="btn btn-danger delete-category-btn" 
-                    data-id="${category.catid}" 
-                    data-name="${category.name}">
-              Delete
-            </button>
-          </td>
-        </tr>
-      `;
-    });
-    
-    tableBody.innerHTML = html;
+    // Use the safe rendering utility from sanitize.js
+    window.sanitizeUtils.renderSafeTable(
+      tableBody,
+      categories,
+      {
+        catid: (cell, value) => {
+          cell.textContent = value;
+        },
+        name: (cell, value) => {
+          cell.textContent = value;
+        }
+      },
+      (actionsCell, category) => {
+        // Create edit button
+        const editButton = document.createElement('button');
+        editButton.className = 'btn btn-edit edit-category-btn';
+        editButton.setAttribute('data-id', category.catid);
+        editButton.setAttribute('data-name', window.sanitizeUtils.encodeHTML(category.name));
+        editButton.textContent = 'Edit';
+        
+        // Create delete button
+        const deleteButton = document.createElement('button');
+        deleteButton.className = 'btn btn-danger delete-category-btn';
+        deleteButton.setAttribute('data-id', category.catid);
+        deleteButton.setAttribute('data-name', window.sanitizeUtils.encodeHTML(category.name));
+        deleteButton.textContent = 'Delete';
+        
+        // Add buttons to the cell
+        actionsCell.appendChild(editButton);
+        actionsCell.appendChild(deleteButton);
+      }
+    );
   }
 
   async function handleAddCategory(event) {
@@ -200,7 +213,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const categoryName = formData.get('name');
     
     try {
-      const response = await fetch('/api/categories', {
+      // Use the safeFetch method to automatically add CSRF token
+      const response = await window.csrfUtils.safeFetch('/api/categories', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -226,10 +240,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // Safely open edit category modal
   function openEditCategoryModal(catId, catName) {
-    // Populate form fields
+    // Populate form fields safely
     document.getElementById('edit-category-id').value = catId;
-    document.getElementById('edit-category-name').value = catName;
+    document.getElementById('edit-category-name').value = window.sanitizeUtils.encodeHTML(catName);
     
     // Show the modal
     document.getElementById('edit-category-modal').style.display = 'block';
@@ -243,7 +258,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const catName = formData.get('name');
     
     try {
-      const response = await fetch(`/api/categories/${catId}`, {
+      // Use the safeFetch method to automatically add CSRF token
+      const response = await window.csrfUtils.safeFetch(`/api/categories/${catId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json'
@@ -269,15 +285,18 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // Safely confirm category deletion
   function confirmDeleteCategory(catId, catName) {
-    if (confirm(`Are you sure you want to delete the category "${catName}"? This action cannot be undone.`)) {
+    const safeName = window.sanitizeUtils.encodeHTML(catName);
+    if (confirm(`Are you sure you want to delete the category "${safeName}"? This action cannot be undone.`)) {
       deleteCategory(catId);
     }
   }
 
   async function deleteCategory(catId) {
     try {
-      const response = await fetch(`/api/categories/${catId}`, {
+      // Use the safeFetch method to automatically add CSRF token
+      const response = await window.csrfUtils.safeFetch(`/api/categories/${catId}`, {
         method: 'DELETE'
       });
       
@@ -316,40 +335,58 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // Modified version of renderProductsTable with sanitization
   function renderProductsTable(tableBody, products) {
     if (products.length === 0) {
       tableBody.innerHTML = '<tr><td colspan="6">No products found</td></tr>';
       return;
     }
     
-    let html = '';
-    
-    products.forEach(product => {
-      html += `
-        <tr>
-          <td>${product.pid}</td>
-          <td>
-            <img src="/uploads/products/${product.image}" alt="${product.name}" height="50">
-          </td>
-          <td>${product.name}</td>
-          <td>${product.category_name}</td>
-          <td>$${parseFloat(product.price).toFixed(2)}</td>
-          <td class="table-actions">
-            <button class="btn btn-edit edit-product-btn" 
-                    data-id="${product.pid}">
-              Edit
-            </button>
-            <button class="btn btn-danger delete-product-btn" 
-                    data-id="${product.pid}" 
-                    data-name="${product.name}">
-              Delete
-            </button>
-          </td>
-        </tr>
-      `;
-    });
-    
-    tableBody.innerHTML = html;
+    // Use the safe rendering utility from sanitize.js
+    window.sanitizeUtils.renderSafeTable(
+      tableBody,
+      products,
+      {
+        pid: (cell, value) => {
+          cell.textContent = value;
+        },
+        image: (cell, value) => {
+          // Create image element safely
+          const img = document.createElement('img');
+          img.src = `/uploads/products/${window.sanitizeUtils.encodeHTML(value)}`;
+          img.alt = 'Product image';
+          img.height = 50;
+          cell.appendChild(img);
+        },
+        name: (cell, value) => {
+          cell.textContent = value;
+        },
+        category_name: (cell, value) => {
+          cell.textContent = value;
+        },
+        price: (cell, value) => {
+          cell.textContent = `$${parseFloat(value).toFixed(2)}`;
+        }
+      },
+      (actionsCell, product) => {
+        // Create edit button
+        const editButton = document.createElement('button');
+        editButton.className = 'btn btn-edit edit-product-btn';
+        editButton.setAttribute('data-id', product.pid);
+        editButton.textContent = 'Edit';
+        
+        // Create delete button
+        const deleteButton = document.createElement('button');
+        deleteButton.className = 'btn btn-danger delete-product-btn';
+        deleteButton.setAttribute('data-id', product.pid);
+        deleteButton.setAttribute('data-name', window.sanitizeUtils.encodeHTML(product.name));
+        deleteButton.textContent = 'Delete';
+        
+        // Add buttons to the cell
+        actionsCell.appendChild(editButton);
+        actionsCell.appendChild(deleteButton);
+      }
+    );
   }
 
   async function handleAddProduct(event) {
@@ -357,10 +394,17 @@ document.addEventListener('DOMContentLoaded', () => {
     
     const formData = new FormData(event.target);
     
+    // Add CSRF token to the form data
+    const csrfToken = await window.csrfUtils.getToken();
+    formData.append('csrf_token', csrfToken);
+    
     try {
       const response = await fetch('/api/products', {
         method: 'POST',
-        body: formData
+        body: formData,
+        headers: {
+          'X-CSRF-Token': csrfToken
+        }
       });
       
       if (!response.ok) {
@@ -381,6 +425,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // Safely open edit product modal
   async function openEditProductModal(productId) {
     try {
       // First, get the product details
@@ -397,11 +442,11 @@ document.addEventListener('DOMContentLoaded', () => {
         throw new Error('Product not found');
       }
       
-      // Populate form fields
+      // Populate form fields safely
       document.getElementById('edit-product-id').value = product.pid;
-      document.getElementById('edit-product-name').value = product.name;
+      document.getElementById('edit-product-name').value = window.sanitizeUtils.encodeHTML(product.name);
       document.getElementById('edit-product-price').value = product.price;
-      document.getElementById('edit-product-description').value = product.description;
+      document.getElementById('edit-product-description').value = window.sanitizeUtils.encodeHTML(product.description);
       
       // Set the selected category
       const categorySelect = document.getElementById('edit-product-category');
@@ -412,8 +457,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
       
-      // Show current image
-      document.getElementById('current-product-image').src = `/uploads/products/${product.image}`;
+      // Show current image safely
+      const imgElement = document.getElementById('current-product-image');
+      imgElement.src = `/uploads/products/${window.sanitizeUtils.encodeHTML(product.image)}`;
+      imgElement.alt = window.sanitizeUtils.encodeHTML(product.name);
       
       // Show the modal
       document.getElementById('edit-product-modal').style.display = 'block';
@@ -435,10 +482,17 @@ document.addEventListener('DOMContentLoaded', () => {
       formData.delete('image');
     }
     
+    // Add CSRF token to the form data
+    const csrfToken = await window.csrfUtils.getToken();
+    formData.append('csrf_token', csrfToken);
+    
     try {
       const response = await fetch(`/api/products/${productId}`, {
         method: 'PUT',
-        body: formData
+        body: formData,
+        headers: {
+          'X-CSRF-Token': csrfToken
+        }
       });
       
       if (!response.ok) {
@@ -459,15 +513,18 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // Safely confirm product deletion
   function confirmDeleteProduct(productId, productName) {
-    if (confirm(`Are you sure you want to delete the product "${productName}"? This action cannot be undone.`)) {
+    const safeName = window.sanitizeUtils.encodeHTML(productName);
+    if (confirm(`Are you sure you want to delete the product "${safeName}"? This action cannot be undone.`)) {
       deleteProduct(productId);
     }
   }
 
   async function deleteProduct(productId) {
     try {
-      const response = await fetch(`/api/products/${productId}`, {
+      // Use the safeFetch method to automatically add CSRF token
+      const response = await window.csrfUtils.safeFetch(`/api/products/${productId}`, {
         method: 'DELETE'
       });
       

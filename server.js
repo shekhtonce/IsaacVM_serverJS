@@ -1,3 +1,4 @@
+const sanitizeHtml = require('sanitize-html');
 const sharp = require('sharp');
 const express = require('express');
 const path = require('path');
@@ -20,6 +21,110 @@ if (!fs.existsSync(dbPath)) {
 }
 
 const db = sqlite3(dbPath, { verbose: console.log });
+
+/**
+ * Safe query execution wrapper to prevent SQL injection
+ * @param {string} query - SQL query with placeholders
+ * @param {Array|Object} params - Parameters to bind to the query
+ * @param {boolean} getAll - Whether to return all results or just one
+ * @returns {any} Query results
+ */
+function executeQuery(query, params = [], getAll = false) {
+  try {
+    // Validate that the query is a string
+    if (typeof query !== 'string') {
+      throw new Error('Invalid query: Query must be a string');
+    }
+    
+    // Check for unsafe SQL patterns
+    const unsafePatterns = [
+      /\bUNION\b/i,
+      /\bOR\s+1\s*=\s*1\b/i,
+      /\bOR\s+'[^']*'\s*=\s*'[^']*'\b/i,
+      /\bDROP\s+TABLE\b/i,
+      /\bALTER\s+TABLE\b/i,
+      /--/,
+      /\/\*/,
+      /;\s*\w+/  // Multiple statements
+    ];
+    
+    for (const pattern of unsafePatterns) {
+      if (pattern.test(query)) {
+        console.error('Potential SQL injection attempt detected:', query);
+        throw new Error('Invalid query: Potential SQL injection detected');
+      }
+    }
+    
+    // Prepare and execute the statement
+    const stmt = db.prepare(query);
+    
+    if (getAll) {
+      // For SELECT queries that return multiple rows
+      if (Array.isArray(params) && params.length > 0) {
+        return stmt.all(...params);
+      } else if (typeof params === 'object' && params !== null && !Array.isArray(params)) {
+        return stmt.all(params);
+      } else {
+        return stmt.all();
+      }
+    } else {
+      // For INSERT, UPDATE, DELETE or SELECT queries that return one row
+      if (Array.isArray(params) && params.length > 0) {
+        return stmt.run(...params);
+      } else if (typeof params === 'object' && params !== null && !Array.isArray(params)) {
+        return stmt.run(params);
+      } else {
+        return stmt.run();
+      }
+    }
+  } catch (error) {
+    console.error('Database query error:', error.message);
+    console.error('Query:', query);
+    console.error('Parameters:', JSON.stringify(params));
+    throw new Error('Database operation failed');
+  }
+}
+
+/**
+ * Safe query for getting a single row
+ * @param {string} query - SQL query with placeholders
+ * @param {Array|Object} params - Parameters to bind to the query
+ * @returns {Object|undefined} Query result or undefined if not found
+ */
+function querySingle(query, params = []) {
+  try {
+    // Validate that the query is a string
+    if (typeof query !== 'string') {
+      throw new Error('Invalid query: Query must be a string');
+    }
+    
+    // Prepare and execute the statement
+    const stmt = db.prepare(query);
+    
+    if (Array.isArray(params) && params.length > 0) {
+      return stmt.get(...params);
+    } else if (typeof params === 'object' && params !== null && !Array.isArray(params)) {
+      return stmt.get(params);
+    } else {
+      return stmt.get();
+    }
+  } catch (error) {
+    console.error('Database query error:', error.message);
+    console.error('Query:', query);
+    console.error('Parameters:', JSON.stringify(params));
+    throw new Error('Database operation failed');
+  }
+}
+
+/**
+ * Safe query for getting multiple rows
+ * @param {string} query - SQL query with placeholders
+ * @param {Array|Object} params - Parameters to bind to the query
+ * @returns {Array} Query results
+ */
+function queryAll(query, params = []) {
+  return executeQuery(query, params, true);
+}
 
 // Create tables if they don't exist
 function initializeDatabase() {
@@ -108,6 +213,14 @@ function generateSessionToken() {
   return crypto.randomBytes(32).toString('hex');
 }
 
+/**
+ * Generate a secure CSRF token
+ * @returns {string} Random CSRF token
+ */
+function generateCSRFToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
 // Create initial admin and regular users if none exist
 async function setupInitialUsers() {
   try {
@@ -146,10 +259,127 @@ try {
   console.error('Error initializing database:', err);
 }
 
+// Get all categories for the frontend
+app.get('/api/frontend/categories', (req, res) => {
+  try {
+    const categories = queryAll('SELECT * FROM categories ORDER BY name');
+    res.json(categories);
+  } catch (err) {
+    console.error('Error fetching categories:', err);
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// Get products by category for the frontend
+app.get('/api/frontend/products', (req, res) => {
+  try {
+    const catId = req.query.catid;
+    let query = 'SELECT pid, name, price, image FROM products';
+    let params = [];
+    
+    if (catId && validateInput(catId, 'catid')) {
+      query += ' WHERE catid = ?';
+      params = [catId];
+    }
+    
+    query += ' ORDER BY name';
+    
+    const results = queryAll(query, params);
+    
+    // Update image URLs to point to thumbnails
+    results.forEach(product => {
+      if (product.image) {
+        // Check if a thumbnail exists, if not, use the original image
+        const thumbnailName = 'thumb_' + product.image;
+        const thumbnailPath = path.join(__dirname, 'uploads/products', thumbnailName);
+        if (fs.existsSync(thumbnailPath)) {
+          product.thumbnail = thumbnailName;
+        } else {
+          product.thumbnail = product.image;
+        }
+      }
+    });
+    
+    res.json(results);
+  } catch (err) {
+    console.error('Error fetching products:', err);
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// Get single product details for the frontend
+app.get('/api/frontend/products/:id', (req, res) => {
+  try {
+    const productId = req.params.id;
+    
+    if (!validateInput(productId, 'catid')) {
+      return res.status(400).json({ error: 'Invalid product ID' });
+    }
+    
+    const query = `
+      SELECT p.*, c.name as category_name 
+      FROM products p
+      JOIN categories c ON p.catid = c.catid
+      WHERE p.pid = ?
+    `;
+    
+    const product = querySingle(query, [productId]);
+    
+    if (!product) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+    
+    // Add thumbnail URL if available
+    if (product.image) {
+      const thumbnailName = 'thumb_' + product.image;
+      const thumbnailPath = path.join(__dirname, 'uploads/products', thumbnailName);
+      if (fs.existsSync(thumbnailPath)) {
+        product.thumbnail = thumbnailName;
+      } else {
+        product.thumbnail = product.image;
+      }
+    }
+    
+    res.json(product);
+  } catch (err) {
+    console.error('Error fetching product details:', err);
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
+app.use(addSecurityHeaders);
+
+// Debug middleware to log all requests
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  next();
+});
+
 // Middleware to parse form data
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
+
+// Add this function to sanitize all input from request bodies
+function sanitizeRequestBody(req, res, next) {
+  if (req.body) {
+    for (const key in req.body) {
+      if (Object.prototype.hasOwnProperty.call(req.body, key) && typeof req.body[key] === 'string') {
+        // Skip sanitization for password fields
+        if (!key.toLowerCase().includes('password')) {
+          req.body[key] = sanitizeHtml(req.body[key], {
+            allowedTags: [],
+            allowedAttributes: {}
+          });
+        }
+      }
+    }
+  }
+  next();
+}
+
+app.use(sanitizeRequestBody);
+
 // Set up multer for file uploads
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -231,10 +461,11 @@ function isAuthenticated(req, res, next) {
   }
   
   try {
-    // Get session from database
-    const session = db.prepare(
-      'SELECT s.*, u.is_admin FROM sessions s JOIN users u ON s.userid = u.userid WHERE s.session_id = ? AND s.expires_at > datetime(\'now\')' // Use single quotes around 'now'
-    ).get(sessionId);
+    // Get session from database using our safe query function
+    const session = querySingle(
+      'SELECT s.*, u.is_admin FROM sessions s JOIN users u ON s.userid = u.userid WHERE s.session_id = ? AND s.expires_at > datetime(\'now\')',
+      [sessionId]
+    );
     
     if (!session) {
       // Session expired or not found
@@ -280,16 +511,20 @@ function validateCSRF(req, res, next) {
   
   // For APIs that require authentication, check if the CSRF token matches the session
   if (req.cookies.session_id) {
-    const session = db.prepare('SELECT * FROM sessions WHERE session_id = ?').get(req.cookies.session_id);
+    const session = querySingle('SELECT * FROM sessions WHERE session_id = ?', [req.cookies.session_id]);
     
     if (session) {
       // Check if this session has a csrf_token stored
-      const sessionCSRF = db.prepare('SELECT value FROM session_data WHERE session_id = ? AND key = \'csrf_token\'').get(session.session_id); // Use single quotes around 'csrf_token'
+      const sessionCSRF = querySingle(
+        'SELECT value FROM session_data WHERE session_id = ? AND key = ?', 
+        [session.session_id, 'csrf_token']
+      );
       
       // If no CSRF token is stored for this session, store it
       if (!sessionCSRF) {
-        db.prepare('INSERT INTO session_data (session_id, key, value) VALUES (?, ?, ?)').run(
-          session.session_id, 'csrf_token', csrfToken
+        executeQuery(
+          'INSERT INTO session_data (session_id, key, value) VALUES (?, ?, ?)',
+          [session.session_id, 'csrf_token', csrfToken]
         );
       } 
       // If a CSRF token is stored, validate it
@@ -302,20 +537,112 @@ function validateCSRF(req, res, next) {
   next();
 }
 
+// Enhanced CSRF validation middleware using double-submit cookie pattern
+function validateEnhancedCSRF(req, res, next) {
+  // For GET requests, no CSRF validation is needed
+  if (req.method === 'GET') {
+    return next();
+  }
+  
+  // Get the CSRF token from request body or headers
+  const requestCSRFToken = req.body.csrf_token || req.headers['x-csrf-token'];
+  
+  // Get the CSRF token from the cookies
+  const cookieCSRFToken = req.cookies.csrf_token;
+  
+  // If no CSRF token is provided in request, reject it
+  if (!requestCSRFToken) {
+    return res.status(403).json({ error: 'CSRF token is required' });
+  }
+  
+  // If no CSRF cookie is set, reject the request (cookie might have expired)
+  if (!cookieCSRFToken) {
+    return res.status(403).json({ error: 'CSRF cookie is missing or expired' });
+  }
+  
+  // Validate that the CSRF token in the request matches the one in the cookie
+  if (requestCSRFToken !== cookieCSRFToken) {
+    return res.status(403).json({ error: 'Invalid CSRF token' });
+  }
+  
+  // For authenticated requests, also validate against stored session token
+  if (req.cookies.session_id) {
+    const session = querySingle('SELECT * FROM sessions WHERE session_id = ?', [req.cookies.session_id]);
+    
+    if (session) {
+      // Check if this session has a csrf_token stored
+      const sessionCSRF = querySingle(
+        'SELECT value FROM session_data WHERE session_id = ? AND key = ?', 
+        [session.session_id, 'csrf_token']
+      );
+      
+      // If no CSRF token is stored for this session, store it
+      if (!sessionCSRF) {
+        executeQuery(
+          'INSERT INTO session_data (session_id, key, value) VALUES (?, ?, ?)',
+          [session.session_id, 'csrf_token', requestCSRFToken]
+        );
+      } 
+      // If a CSRF token is stored, validate it against the request token
+      else if (sessionCSRF.value !== requestCSRFToken) {
+        return res.status(403).json({ error: 'Invalid session CSRF token' });
+      }
+    }
+  }
+  
+  // If we get here, the CSRF token is valid
+  next();
+}
+
 // Helper function to validate input
 const validateInput = (input, type) => {
+  if (input === undefined || input === null) {
+    return false;
+  }
+
+  // Sanitize input first
+  let sanitizedInput = typeof input === 'string' ? sanitizeHtml(input, {
+    allowedTags: [],
+    allowedAttributes: {}
+  }) : input;
+
   switch (type) {
     case 'name':
-      // Alphanumeric and spaces only
-      return /^[a-zA-Z0-9\s]+$/.test(input);
+      // Alphanumeric and spaces only, length limits
+      return typeof sanitizedInput === 'string' && 
+             /^[a-zA-Z0-9\s]{1,100}$/.test(sanitizedInput);
+    
+    case 'email':
+      // Valid email format
+      return typeof sanitizedInput === 'string' && 
+             /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(sanitizedInput) &&
+             sanitizedInput.length <= 100;
+    
+    case 'password':
+      // At least 8 characters, no more than 100
+      return typeof sanitizedInput === 'string' && 
+             sanitizedInput.length >= 8 && 
+             sanitizedInput.length <= 100;
+    
     case 'price':
       // Positive number with up to 2 decimal places
-      return /^\d+(\.\d{1,2})?$/.test(input) && parseFloat(input) > 0;
+      return /^\d+(\.\d{1,2})?$/.test(sanitizedInput) && 
+             parseFloat(sanitizedInput) > 0 &&
+             parseFloat(sanitizedInput) <= 1000000; // Upper limit for price
+    
     case 'catid':
       // Positive integer
-      return /^\d+$/.test(input) && parseInt(input) > 0;
+      return /^\d+$/.test(sanitizedInput) && 
+             parseInt(sanitizedInput) > 0 &&
+             parseInt(sanitizedInput) <= 1000000; // Upper limit for IDs
+    
+    case 'description':
+      // Limit length, allow basic text formatting
+      return typeof sanitizedInput === 'string' && 
+             sanitizedInput.length <= 2000;
+             
     default:
-      return true;
+      return false;
   }
 };
 
@@ -337,6 +664,83 @@ app.use(['/api/categories', '/api/products', '/api/auth/change-password', '/api/
 // END OF ROUTE PROTECTION
 // =====================================================
 
+// Security headers middleware
+function addSecurityHeaders(req, res, next) {
+  // Content Security Policy
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; " +
+    "script-src 'self'; " +
+    "style-src 'self'; " +
+    "img-src 'self' data:; " +
+    "font-src 'self'; " +
+    "connect-src 'self'; " +
+    "frame-src 'none'; " +
+    "object-src 'none'; " +
+    "base-uri 'self'; " +
+    "form-action 'self'"
+  );
+  
+  // Prevent browser from MIME-sniffing
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  
+  // Prevent clickjacking
+  res.setHeader('X-Frame-Options', 'DENY');
+  
+  // Enable XSS filtering in browsers
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  
+  next();
+}
+
+// Sanitization utility function
+function sanitizeData(data) {
+  if (typeof data === 'string') {
+    // Sanitize string data
+    return sanitizeHtml(data, {
+      allowedTags: [], // No HTML tags allowed
+      allowedAttributes: {}, // No attributes allowed
+      disallowedTagsMode: 'recursiveEscape' // Convert all disallowed tags to safe strings
+    });
+  } else if (Array.isArray(data)) {
+    // Sanitize array data
+    return data.map(item => sanitizeData(item));
+  } else if (data && typeof data === 'object') {
+    // Sanitize object data
+    const sanitized = {};
+    for (const key in data) {
+      if (Object.prototype.hasOwnProperty.call(data, key)) {
+        // Skip sanitization for certain fields
+        if (['image', 'thumbnail', 'pid', 'catid', 'price', 'userid', 'is_admin', 'expires_at', 'created_at'].includes(key)) {
+          sanitized[key] = data[key];
+        } else {
+          sanitized[key] = sanitizeData(data[key]);
+        }
+      }
+    }
+    return sanitized;
+  }
+  // Return other data types as is
+  return data;
+}
+
+// Middleware to sanitize all API responses
+app.use('/api', (req, res, next) => {
+  // Store the original res.json method
+  const originalJson = res.json;
+  
+  // Override the res.json method to sanitize data before sending
+  res.json = function(data) {
+    // Sanitize the data
+    const sanitizedData = sanitizeData(data);
+    
+    // Call the original method with sanitized data
+    return originalJson.call(this, sanitizedData);
+  };
+  
+  next();
+});
+
 // Login endpoint with CSRF validation
 app.post('/api/auth/login', validateCSRF, async (req, res) => {
   try {
@@ -347,8 +751,8 @@ app.post('/api/auth/login', validateCSRF, async (req, res) => {
       return res.status(400).json({ error: 'Email and password are required' });
     }
     
-    // Find user by email
-    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+    // Find user by email using our safe query function
+    const user = querySingle('SELECT * FROM users WHERE email = ?', [email]);
     
     if (!user) {
       // Don't reveal that the user doesn't exist
@@ -368,17 +772,19 @@ app.post('/api/auth/login', validateCSRF, async (req, res) => {
     expiresAt.setDate(expiresAt.getDate() + 1); // 1 day expiration
     
     // Delete any existing sessions for this user (for session rotation)
-    db.prepare('DELETE FROM sessions WHERE userid = ?').run(user.userid);
+    executeQuery('DELETE FROM sessions WHERE userid = ?', [user.userid]);
     
     // Insert new session
-    db.prepare(
-      'INSERT INTO sessions (session_id, userid, expires_at) VALUES (?, ?, ?)'
-    ).run(sessionId, user.userid, expiresAt.toISOString());
+    executeQuery(
+      'INSERT INTO sessions (session_id, userid, expires_at) VALUES (?, ?, ?)',
+      [sessionId, user.userid, expiresAt.toISOString()]
+    );
     
     // Store CSRF token with session
     if (csrf_token) {
-      db.prepare('INSERT INTO session_data (session_id, key, value) VALUES (?, ?, ?)').run(
-        sessionId, 'csrf_token', csrf_token
+      executeQuery(
+        'INSERT INTO session_data (session_id, key, value) VALUES (?, ?, ?)',
+        [sessionId, 'csrf_token', csrf_token]
       );
     }
     
@@ -410,7 +816,7 @@ app.post('/api/auth/logout', isAuthenticated, (req, res) => {
     const sessionId = req.cookies.session_id;
     
     // Delete session from database
-    db.prepare('DELETE FROM sessions WHERE session_id = ?').run(sessionId);
+    executeQuery('DELETE FROM sessions WHERE session_id = ?', [sessionId]);
     
     // Clear cookie
     res.clearCookie('session_id');
@@ -425,7 +831,7 @@ app.post('/api/auth/logout', isAuthenticated, (req, res) => {
 // Get current user info
 app.get('/api/auth/user', isAuthenticated, (req, res) => {
   try {
-    const user = db.prepare('SELECT email, is_admin FROM users WHERE userid = ?').get(req.user.userid);
+    const user = querySingle('SELECT email, is_admin FROM users WHERE userid = ?', [req.user.userid]);
     
     res.json({
       email: user.email,
@@ -453,7 +859,7 @@ app.post('/api/auth/change-password', isAuthenticated, async (req, res) => {
     }
     
     // Get user from database
-    const user = db.prepare('SELECT * FROM users WHERE userid = ?').get(req.user.userid);
+    const user = querySingle('SELECT * FROM users WHERE userid = ?', [req.user.userid]);
     
     // Verify current password
     const passwordMatch = await verifyPassword(currentPassword, user.password, user.salt);
@@ -467,12 +873,13 @@ app.post('/api/auth/change-password', isAuthenticated, async (req, res) => {
     const newHash = await hashPassword(newPassword, newSalt);
     
     // Update password in database
-    db.prepare(
-      'UPDATE users SET password = ?, salt = ? WHERE userid = ?'
-    ).run(newHash, newSalt, user.userid);
+    executeQuery(
+      'UPDATE users SET password = ?, salt = ? WHERE userid = ?',
+      [newHash, newSalt, user.userid]
+    );
     
     // Delete all sessions for this user
-    db.prepare('DELETE FROM sessions WHERE userid = ?').run(user.userid);
+    executeQuery('DELETE FROM sessions WHERE userid = ?', [user.userid]);
     
     // Clear session cookie
     res.clearCookie('session_id');
@@ -493,7 +900,7 @@ app.post('/api/auth/change-password', isAuthenticated, async (req, res) => {
 // Get all categories for the frontend
 app.get('/api/frontend/categories', (req, res) => {
   try {
-    const categories = db.prepare('SELECT * FROM categories ORDER BY name').all();
+    const categories = queryAll('SELECT * FROM categories ORDER BY name');
     res.json(categories);
   } catch (err) {
     console.error('Error fetching categories:', err);
@@ -515,14 +922,7 @@ app.get('/api/frontend/products', (req, res) => {
     
     query += ' ORDER BY name';
     
-    const stmt = db.prepare(query);
-    let results;
-    
-    if (params.length > 0) {
-      results = stmt.all(params[0]);
-    } else {
-      results = stmt.all();
-    }
+    const results = queryAll(query, params);
     
     // Update image URLs to point to thumbnails
     results.forEach(product => {
@@ -561,7 +961,7 @@ app.get('/api/frontend/products/:id', (req, res) => {
       WHERE p.pid = ?
     `;
     
-    const product = db.prepare(query).get(productId);
+    const product = querySingle(query, [productId]);
     
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
@@ -588,7 +988,7 @@ app.get('/api/frontend/products/:id', (req, res) => {
 // Get all categories
 app.get('/api/categories', (req, res) => {
   try {
-    const categories = db.prepare('SELECT * FROM categories ORDER BY name').all();
+    const categories = queryAll('SELECT * FROM categories ORDER BY name');
     res.json(categories);
   } catch (err) {
     console.error('Error fetching categories:', err);
@@ -606,8 +1006,7 @@ app.post('/api/categories', (req, res) => {
       return res.status(400).json({ error: 'Invalid category name' });
     }
     
-    const stmt = db.prepare('INSERT INTO categories (name) VALUES (?)');
-    const result = stmt.run(name);
+    const result = executeQuery('INSERT INTO categories (name) VALUES (?)', [name]);
     
     res.status(201).json({ id: result.lastInsertRowid, name });
   } catch (err) {
@@ -627,8 +1026,7 @@ app.put('/api/categories/:id', (req, res) => {
       return res.status(400).json({ error: 'Invalid input' });
     }
     
-    const stmt = db.prepare('UPDATE categories SET name = ? WHERE catid = ?');
-    const result = stmt.run(name, id);
+    const result = executeQuery('UPDATE categories SET name = ? WHERE catid = ?', [name, id]);
     
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Category not found' });
@@ -652,16 +1050,14 @@ app.delete('/api/categories/:id', (req, res) => {
     }
     
     // First check if there are any products in this category
-    const countStmt = db.prepare('SELECT COUNT(*) as count FROM products WHERE catid = ?');
-    const { count } = countStmt.get(id);
+    const { count } = querySingle('SELECT COUNT(*) as count FROM products WHERE catid = ?', [id]);
     
     if (count > 0) {
       return res.status(400).json({ error: 'Cannot delete category with products. Move or delete the products first.' });
     }
     
     // If no products, proceed with deletion
-    const deleteStmt = db.prepare('DELETE FROM categories WHERE catid = ?');
-    const result = deleteStmt.run(id);
+    const result = executeQuery('DELETE FROM categories WHERE catid = ?', [id]);
     
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Category not found' });
@@ -684,10 +1080,33 @@ app.get('/api/products', (req, res) => {
       ORDER BY p.name
     `;
     
-    const products = db.prepare(query).all();
+    const products = queryAll(query);
     res.json(products);
   } catch (err) {
     console.error('Error fetching products:', err);
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// Get dashboard stats
+app.get('/api/stats', (req, res) => {
+  try {
+    // Ensure user is authenticated and admin (middleware should handle this)
+    // If the middleware didn't run or failed, req.user might not be set.
+    // Although app.use should handle this, an extra check can be added if needed.
+    // if (!req.user || !req.user.is_admin) {
+    //   return res.status(403).json({ error: 'Forbidden' });
+    // }
+
+    const categoryCount = querySingle('SELECT COUNT(*) as count FROM categories').count;
+    const productCount = querySingle('SELECT COUNT(*) as count FROM products').count;
+    
+    res.json({
+      categoryCount,
+      productCount
+    });
+  } catch (err) {
+    console.error('Error fetching stats:', err);
     res.status(500).json({ error: 'Database error' });
   }
 });
@@ -858,15 +1277,14 @@ app.delete('/api/products/:id', (req, res) => {
     }
     
     // First get the product to find the image filename
-    const product = db.prepare('SELECT * FROM products WHERE pid = ?').get(id);
+    const product = querySingle('SELECT * FROM products WHERE pid = ?', [id]);
     
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
     }
     
     // Delete the product from the database
-    const stmt = db.prepare('DELETE FROM products WHERE pid = ?');
-    stmt.run(id);
+    executeQuery('DELETE FROM products WHERE pid = ?', [id]);
     
     // Delete the product image and thumbnail
     const imagePath = path.join(__dirname, 'uploads/products', product.image);
@@ -883,22 +1301,6 @@ app.delete('/api/products/:id', (req, res) => {
     res.json({ message: 'Product deleted successfully' });
   } catch (err) {
     console.error('Error deleting product:', err);
-    res.status(500).json({ error: 'Database error' });
-  }
-});
-
-// Get dashboard stats
-app.get('/api/stats', (req, res) => {
-  try {
-    const categoryCount = db.prepare('SELECT COUNT(*) as count FROM categories').get().count;
-    const productCount = db.prepare('SELECT COUNT(*) as count FROM products').get().count;
-    
-    res.json({
-      categoryCount,
-      productCount
-    });
-  } catch (err) {
-    console.error('Error fetching stats:', err);
     res.status(500).json({ error: 'Database error' });
   }
 });
@@ -996,4 +1398,22 @@ process.on('SIGINT', () => {
 // Start the server
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
+});
+
+// Route to get a new CSRF token
+app.get('/api/csrf-token', (req, res) => {
+  // Generate a new CSRF token
+  const csrfToken = generateCSRFToken();
+  
+  // Set it as a cookie
+  res.cookie('csrf_token', csrfToken, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'strict',
+    // Expire in 2 hours
+    maxAge: 2 * 60 * 60 * 1000
+  });
+  
+  // Also return it in the response body so the client can store it
+  res.json({ csrf_token: csrfToken });
 });

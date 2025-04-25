@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const sanitizeHtml = require('sanitize-html');
 const sharp = require('sharp');
 const express = require('express');
@@ -7,6 +9,42 @@ const fs = require('fs');
 const sqlite3 = require('better-sqlite3');
 const crypto = require('crypto');
 const cookieParser = require('cookie-parser');
+const paypal = require('@paypal/checkout-server-sdk');
+
+// --- PayPal SDK Setup ---
+
+/**
+ * Returns the PayPal HTTP client instance configured for the current environment.
+ * Use this client to Execute API calls.
+ */
+function paypalClient() {
+  const clientId = process.env.PAYPAL_CLIENT_ID;
+  const clientSecret = process.env.PAYPAL_SECRET;
+  const environmentUrl = process.env.PAYPAL_API_URL || 'https://api-m.sandbox.paypal.com'; // Default to sandbox
+
+  if (!clientId || !clientSecret) {
+      console.error('FATAL ERROR: PayPal Client ID or Secret not found in environment variables.');
+      // Consider exiting the process if PayPal is essential for the app to run
+      // process.exit(1); 
+  }
+
+  // Determine environment based on URL (simple check)
+  let environment;
+  if (environmentUrl.includes('sandbox')) {
+      environment = new paypal.core.SandboxEnvironment(clientId, clientSecret);
+  } else {
+      // IMPORTANT: For production, use LiveEnvironment
+      // environment = new paypal.core.LiveEnvironment(clientId, clientSecret);
+       console.warn('Using PayPal Sandbox Environment.');
+       environment = new paypal.core.SandboxEnvironment(clientId, clientSecret); // Keep sandbox for now
+  }
+
+  const client = new paypal.core.PayPalHttpClient(environment);
+  return client;
+}
+
+// Example of how to get the client instance (don't call it here globally, call it inside your route handlers when needed)
+// const client = paypalClient(); 
 
 // Create Express app
 const app = express();
@@ -184,6 +222,46 @@ function initializeDatabase() {
     )
   `);
 
+// Create orders table
+db.exec(`
+  CREATE TABLE IF NOT EXISTS orders (
+    order_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,                            -- Nullable for guest checkouts
+    paypal_order_id TEXT UNIQUE,                -- PayPal's order ID, received when order is created via API
+    paypal_transaction_id TEXT UNIQUE,          -- PayPal's transaction ID, received after successful payment (webhook/capture)
+    status TEXT NOT NULL DEFAULT 'CREATED',     -- e.g., CREATED, APPROVED, COMPLETED, FAILED
+    currency_code TEXT NOT NULL,                -- e.g., USD, EUR
+    total_amount REAL NOT NULL,                 -- Total amount calculated by our server
+    order_digest TEXT NOT NULL UNIQUE,          -- Server-generated hash for validation
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(userid) ON DELETE SET NULL -- Keep order even if user is deleted
+  )
+`);
+
+// Create order_items table
+db.exec(`
+  CREATE TABLE IF NOT EXISTS order_items (
+    order_item_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    quantity INTEGER NOT NULL CHECK(quantity > 0), -- Ensure quantity is positive
+    price_at_purchase REAL NOT NULL,               -- Price of the item at the time of order
+    FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE CASCADE, -- Delete items if order is deleted
+    FOREIGN KEY (product_id) REFERENCES products(pid) ON DELETE RESTRICT -- Prevent deleting product if part of an order
+  )
+`);
+
+// Add triggers to update the 'updated_at' timestamp on orders table changes
+db.exec(`
+    CREATE TRIGGER IF NOT EXISTS update_orders_updated_at
+    AFTER UPDATE ON orders
+    FOR EACH ROW
+    BEGIN
+        UPDATE orders SET updated_at = CURRENT_TIMESTAMP WHERE order_id = OLD.order_id;
+    END;
+`);
+  
   console.log('Database initialized successfully');
 }
 
@@ -1305,6 +1383,325 @@ app.delete('/api/products/:id', (req, res) => {
   }
 });
 
+// =====================================================
+// ORDER API ENDPOINTS
+// =====================================================
+
+// Create an order endpoint
+app.post('/api/orders/create', validateCSRF, async (req, res) => {
+  try {
+    console.log('Received order creation request:', req.body);
+
+    // Get cart items from request body
+    const { items } = req.body;
+
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      console.error('Invalid or empty cart');
+      return res.status(400).json({ error: 'Invalid or empty cart' });
+    }
+
+    // Validate cart items
+    for (const item of items) {
+      if (!item.pid || !validateInput(item.pid, 'catid') || 
+          !item.quantity || parseInt(item.quantity) <= 0) {
+        console.error('Invalid cart item:', item);
+        return res.status(400).json({ error: 'Invalid cart item' });
+      }
+    }
+
+    // Get the current user ID if logged in
+    let userId = null;
+    if (req.cookies.session_id) {
+      const session = querySingle(
+        'SELECT * FROM sessions WHERE session_id = ? AND expires_at > datetime(\'now\')',
+        [req.cookies.session_id]
+      );
+      
+      if (session) {
+        userId = session.userid;
+        console.log('Order associated with user ID:', userId);
+      }
+    }
+
+    // Get product details from database for each item
+    const cartWithDetails = [];
+    let totalAmount = 0;
+
+    for (const item of items) {
+      const product = querySingle('SELECT * FROM products WHERE pid = ?', [item.pid]);
+
+      if (!product) {
+        console.error(`Product with ID ${item.pid} not found`);
+        return res.status(400).json({ error: `Product with ID ${item.pid} not found` });
+      }
+
+      const cartItem = {
+        pid: product.pid,
+        name: product.name,
+        price: parseFloat(product.price),
+        quantity: parseInt(item.quantity)
+      };
+
+      cartWithDetails.push(cartItem);
+      totalAmount += cartItem.price * cartItem.quantity;
+    }
+
+    console.log('Cart with details:', cartWithDetails);
+    console.log('Total amount:', totalAmount);
+
+    // Generate order digest
+    const currencyCode = 'USD'; // Default currency
+    const merchantEmail = process.env.PAYPAL_MERCHANT_EMAIL || 'sb-kaykx40632020@business.example.com';
+    const salt = crypto.randomBytes(16).toString('hex');
+
+    // Create digest string (currency + merchant + salt + item details + total)
+    let digestString = `${currencyCode}|${merchantEmail}|${salt}|`;
+    
+    // Add item details to digest
+    cartWithDetails.forEach(item => {
+      digestString += `${item.pid}:${item.quantity}:${item.price}|`;
+    });
+    
+    // Add total to digest
+    digestString += totalAmount.toFixed(2);
+    
+    console.log('Digest string:', digestString);
+    
+    // Generate the digest using SHA-256
+    const orderDigest = crypto.createHash('sha256').update(digestString).digest('hex');
+    console.log('Order digest:', orderDigest);
+    
+    // Insert order into database
+    const orderResult = executeQuery(
+      'INSERT INTO orders (user_id, currency_code, total_amount, order_digest, status) VALUES (?, ?, ?, ?, ?)',
+      [userId, currencyCode, totalAmount.toFixed(2), orderDigest, 'CREATED']
+    );
+    
+    const orderId = orderResult.lastInsertRowid;
+    console.log('Order created with ID:', orderId);
+    
+    // Insert order items
+    for (const item of cartWithDetails) {
+      executeQuery(
+        'INSERT INTO order_items (order_id, product_id, quantity, price_at_purchase) VALUES (?, ?, ?, ?)',
+        [orderId, item.pid, item.quantity, item.price]
+      );
+    }
+    
+    // Return the order details
+    res.json({
+      orderId,
+      orderDigest,
+      items: cartWithDetails,
+      total: totalAmount.toFixed(2),
+      currency: currencyCode
+    });
+    
+  } catch (error) {
+    console.error('Error creating order:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// PayPal webhook endpoint
+app.post('/api/paypal/webhook', express.raw({type: 'application/json'}), async (req, res) => {
+  try {
+    console.log('Received PayPal webhook:', req.body);
+    
+    // Convert raw body to JSON if needed
+    let payload = req.body;
+    if (Buffer.isBuffer(req.body)) {
+      payload = JSON.parse(req.body.toString());
+    } else if (typeof req.body === 'string') {
+      payload = JSON.parse(req.body);
+    }
+    
+    // In a real production environment, you would verify the webhook signature
+    // using the PayPal SDK. For this example, we'll skip that step.
+    
+    // Get transaction details from the webhook
+    const eventType = payload.event_type;
+    console.log('PayPal event type:', eventType);
+    
+    // We're only interested in payment completion events
+    if (eventType === 'CHECKOUT.ORDER.APPROVED' || eventType === 'PAYMENT.CAPTURE.COMPLETED') {
+      const resource = payload.resource;
+      
+      // Extract order ID and transaction ID
+      const paypalOrderId = resource.id || 
+                            (resource.supplementary_data && resource.supplementary_data.related_ids ?
+                             resource.supplementary_data.related_ids.order_id : null);
+                             
+      const paypalTransactionId = resource.id || 
+                                 (resource.supplementary_data && resource.supplementary_data.related_ids ?
+                                  resource.supplementary_data.related_ids.capture_id : null);
+      
+      console.log('PayPal order ID:', paypalOrderId);
+      console.log('PayPal transaction ID:', paypalTransactionId);
+      
+      if (!paypalOrderId) {
+        console.error('PayPal webhook missing order ID');
+        return res.status(400).send('Missing order ID');
+      }
+      
+      // Get custom field (our order digest) and invoice (our order ID)
+      const customField = resource.custom_id || resource.custom;
+      const invoiceNumber = resource.invoice_id || resource.invoice_number;
+      
+      console.log('Custom field (order digest):', customField);
+      console.log('Invoice number (order ID):', invoiceNumber);
+      
+      // Find the order in our database
+      const order = querySingle('SELECT * FROM orders WHERE order_id = ?', [invoiceNumber]);
+      
+      if (!order) {
+        console.error('Order not found:', invoiceNumber);
+        return res.status(404).send('Order not found');
+      }
+      
+      // Verify the order digest
+      if (order.order_digest !== customField) {
+        console.error('Order digest mismatch');
+        return res.status(400).send('Invalid order digest');
+      }
+      
+      // Update the order status and PayPal transaction details
+      executeQuery(
+        'UPDATE orders SET status = ?, paypal_order_id = ?, paypal_transaction_id = ? WHERE order_id = ?',
+        ['COMPLETED', paypalOrderId, paypalTransactionId, order.order_id]
+      );
+      
+      console.log('Order updated successfully:', order.order_id);
+      
+      // Success response
+      res.status(200).send('Webhook processed successfully');
+    } else {
+      // For other event types, just acknowledge receipt
+      console.log('Unhandled event type, acknowledging receipt');
+      res.status(200).send('Event acknowledged');
+    }
+  } catch (error) {
+    console.error('Error processing PayPal webhook:', error);
+    res.status(500).send('Internal server error');
+  }
+});
+
+// Get orders for the current user
+app.get('/api/orders/user', isAuthenticated, (req, res) => {
+  try {
+    console.log('Fetching orders for user:', req.user.userid);
+    
+    // Get all orders for the current user
+    const orders = queryAll(
+      `SELECT o.* FROM orders o WHERE o.user_id = ? ORDER BY o.created_at DESC LIMIT 5`,
+      [req.user.userid]
+    );
+    
+    console.log('Found orders:', orders.length);
+    
+    // If no orders, return empty array
+    if (orders.length === 0) {
+      return res.json([]);
+    }
+    
+    // Get items for each order
+    const ordersWithItems = orders.map(order => {
+      const items = queryAll(
+        `SELECT oi.*, p.name as product_name 
+         FROM order_items oi 
+         JOIN products p ON oi.product_id = p.pid 
+         WHERE oi.order_id = ?`,
+        [order.order_id]
+      );
+      
+      return {
+        ...order,
+        items
+      };
+    });
+    
+    res.json(ordersWithItems);
+    
+  } catch (error) {
+    console.error('Error fetching user orders:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get all orders (admin only)
+app.get('/api/orders/admin', isAuthenticated, isAdmin, (req, res) => {
+  try {
+    console.log('Fetching all orders for admin');
+    
+    // Get all orders with user email (if available)
+    const orders = queryAll(
+      `SELECT o.*, u.email as user_email 
+       FROM orders o 
+       LEFT JOIN users u ON o.user_id = u.userid 
+       ORDER BY o.created_at DESC`
+    );
+    
+    console.log('Found orders:', orders.length);
+    
+    // Return orders array (even if empty)
+    res.json(orders);
+    
+  } catch (error) {
+    console.error('Error fetching admin orders:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get order details by ID (admin only)
+app.get('/api/orders/:id', isAuthenticated, isAdmin, (req, res) => {
+  try {
+    const orderId = req.params.id;
+    console.log('Fetching order details for order ID:', orderId);
+    
+    // Validate orderId
+    if (!validateInput(orderId, 'catid')) {
+      console.error('Invalid order ID:', orderId);
+      return res.status(400).json({ error: 'Invalid order ID' });
+    }
+    
+    // Get order details
+    const order = querySingle(
+      `SELECT o.*, u.email as user_email 
+       FROM orders o 
+       LEFT JOIN users u ON o.user_id = u.userid 
+       WHERE o.order_id = ?`,
+      [orderId]
+    );
+    
+    if (!order) {
+      console.error('Order not found:', orderId);
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    console.log('Found order:', order.order_id);
+    
+    // Get order items
+    const items = queryAll(
+      `SELECT oi.*, p.name as product_name 
+       FROM order_items oi 
+       JOIN products p ON oi.product_id = p.pid 
+       WHERE oi.order_id = ?`,
+      [orderId]
+    );
+    
+    console.log('Found order items:', items.length);
+    
+    // Add items to order object
+    order.items = items;
+    
+    res.json(order);
+    
+  } catch (error) {
+    console.error('Error fetching order details:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Serve admin HTML pages
 app.get('/admin-categories.html', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin-categories.html'));
@@ -1400,20 +1797,45 @@ app.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
 
-// Route to get a new CSRF token
+// Route to get (or refresh) a CSRF token – keeps it in sync with the session
 app.get('/api/csrf-token', (req, res) => {
-  // Generate a new CSRF token
-  const csrfToken = generateCSRFToken();
-  
-  // Set it as a cookie
+  let csrfToken;
+
+  // 1️⃣ If the user has a valid session, try to fetch the token already stored for it
+  if (req.cookies.session_id) {
+    const session = querySingle(
+      'SELECT * FROM sessions WHERE session_id = ? AND expires_at > datetime(\'now\')',
+      [req.cookies.session_id]
+    );
+    if (session) {
+      const stored = querySingle(
+        'SELECT value FROM session_data WHERE session_id = ? AND key = ?',
+        [session.session_id, 'csrf_token']
+      );
+      if (stored) {
+        csrfToken = stored.value;      // reuse it
+      }
+    }
+  }
+
+  // 2️⃣ If no token yet, create one and (if logged-in) store it with the session
+  if (!csrfToken) {
+    csrfToken = generateCSRFToken();
+    if (req.cookies.session_id) {
+      executeQuery(
+        'INSERT OR REPLACE INTO session_data (session_id, key, value) VALUES (?, ?, ?)',
+        [req.cookies.session_id, 'csrf_token', csrfToken]
+      );
+    }
+  }
+
+  // 3️⃣ Return the token and set/update the cookie
   res.cookie('csrf_token', csrfToken, {
     httpOnly: true,
     secure: true,
     sameSite: 'strict',
-    // Expire in 2 hours
-    maxAge: 2 * 60 * 60 * 1000
+    maxAge: 2 * 60 * 60 * 1000         // 2 hours
   });
-  
-  // Also return it in the response body so the client can store it
+
   res.json({ csrf_token: csrfToken });
 });

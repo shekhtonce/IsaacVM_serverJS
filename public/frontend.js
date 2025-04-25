@@ -67,17 +67,18 @@ async function loadCategories(container, location) {
     let html = '';
     
     if (location === 'header') {
-      // For header, we'll keep the Home link but replace all other links
-      // Get the Home link if it exists
-      const homeLink = container.querySelector('li:first-child').cloneNode(true);
-      
-      // Clear all existing links
-      container.innerHTML = '';
-      
-      // Add back the Home link
-      container.appendChild(homeLink);
-      
-      // Add the categories
+      /* Preserve any static nav items (e.g. Home, My Orders) that were
+         hard-coded in the HTML.  We clone them, clear the UL, then re-append
+         the clones followed by the category links. */
+      const staticLinks = Array.from(container.querySelectorAll('li'))
+                               .map(li => li.cloneNode(true));
+
+      container.innerHTML = '';             // remove everything
+
+      // re-add the original static links
+      staticLinks.forEach(li => container.appendChild(li));
+
+      // now append each category as a new <li>
       categories.forEach(category => {
         const li = document.createElement('li');
         li.innerHTML = `<a href="index.html?catid=${category.catid}">${category.name}</a>`;

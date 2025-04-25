@@ -19,8 +19,15 @@
       <nav class="main-nav">
         <ul>
           <li><a href="index.html">Home</a></li>
+          <li><a href="user-orders.html">My Orders</a></li>
         </ul>
       </nav>
+
+      <!-- USER INFO AND LOGIN -->
+      <div class="user-controls">
+        <div id="user-greeting">Hi guest</div>
+        <button id="login-button" class="login-btn">Login</button>
+      </div>
 
       <!-- CART (same IDs as index.html) -->
       <div class="cart-wrapper">
@@ -33,7 +40,7 @@
             <!-- Dynamically populated via scripts.js -->
           </ul>
           <p class="cart-total">Total: $<span id="cart-total">0</span></p>
-          <button class="checkout-btn">Checkout</button>
+          <button class="checkout-btn" onclick="window.location.href='checkout.html'">Checkout</button>
         </div>
       </div>
     </header>
@@ -87,8 +94,11 @@
 
   </div><!-- end page-container -->
 
+  <script src="sanitize.js" defer></script>
+  <script src="csrf-utils.js" defer></script>
+  <script src="cart.js" defer></script>
   <script src="scripts.js" defer></script>
   <script src="frontend.js" defer></script>
-  <script src="cart.js" defer></script>
+  <script src="auth.js" defer></script>
 </body>
 </html>

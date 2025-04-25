@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Manage Orders - MyShop Admin</title>
+  <link rel="stylesheet" href="/admin-styles.css">
+</head>
+<body>
+  <div class="admin-container">
+    <header class="admin-header">
+      <h1>MyShop Admin Panel</h1>
+      <nav class="admin-nav">
+        <ul>
+          <li><a href="/admin">Dashboard</a></li>
+          <li><a href="/admin-categories">Categories</a></li>
+          <li><a href="/admin-products">Products</a></li>
+          <li><a href="/admin-orders" class="active">Orders</a></li>
+          <li><a href="/" target="_blank">View Shop</a></li>
+        </ul>
+      </nav>
+    </header>
+
+    <main class="admin-content">
+      <section class="admin-section">
+        <h2>Manage Orders</h2>
+        
+        <!-- Orders Filter -->
+        <div class="admin-filter">
+          <div class="filter-group">
+            <label for="order-status-filter">Filter by Status:</label>
+            <select id="order-status-filter">
+              <option value="">All Statuses</option>
+              <option value="CREATED">Created</option>
+              <option value="APPROVED">Approved</option>
+              <option value="COMPLETED">Completed</option>
+              <option value="FAILED">Failed</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label for="order-search">Search:</label>
+            <input type="text" id="order-search" placeholder="Search by Order ID or Customer">
+          </div>
+        </div>
+
+        <!-- Orders Table -->
+        <div class="admin-table-container">
+          <h3>Orders</h3>
+          <table class="admin-table" id="orders-table">
+            <thead>
+              <tr>
+                <th>Order ID</th>
+                <th>Date</th>
+                <th>Customer</th>
+                <th>Status</th>
+                <th>Total</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="orders-list">
+              <!-- Orders will be loaded here via JavaScript -->
+              <tr>
+                <td colspan="6">Loading orders...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Order Details Modal -->
+        <div id="order-details-modal" class="modal">
+          <div class="modal-content">
+            <span class="close">&times;</span>
+            <h3>Order Details</h3>
+            <div id="order-details-content">
+              <!-- Order details will be loaded here -->
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="admin-footer">
+      <p>&copy; 2025 MyShop Admin</p>
+    </footer>
+  </div>
+  <script src="/admin-scripts.js"></script>
+  <script src="/admin-orders.js"></script>
+  <script src="/auth.js"></script>
+  <script src="/sanitize.js"></script>
+  <script src="/csrf-utils.js"></script>
+</body>
+</html>

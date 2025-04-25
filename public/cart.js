@@ -4,6 +4,7 @@ class ShoppingCart {
       this.items = [];
       this.loadFromStorage();
       this.initEventListeners();
+      this.attachCheckoutButtonListener();
     }
     
     initEventListeners() {
@@ -27,6 +28,32 @@ class ShoppingCart {
           }, 200);
         });
       }
+    }
+    
+    attachCheckoutButtonListener() {
+      console.log('Attaching checkout button listener');
+
+      // 🔒 If we are **already** on checkout.html do NOT attach the
+      // “redirect to checkout” listener – it breaks the real checkout flow.
+      if (window.location.pathname.endsWith('checkout.html')) {
+        return;
+      }
+
+      // Use setTimeout to ensure the DOM is fully loaded
+      setTimeout(() => {
+        const checkoutBtns = document.querySelectorAll('.checkout-btn');
+        checkoutBtns.forEach(btn => {
+          if (!btn.hasAttribute('data-listener-attached')) {
+            btn.setAttribute('data-listener-attached', 'true');
+            btn.addEventListener('click', (event) => {
+              event.preventDefault();
+              console.log('Checkout button clicked, redirecting to checkout page');
+              window.location.href = 'checkout.html';
+            });
+            console.log('Listener attached to checkout button:', btn);
+          }
+        });
+      }, 500);
     }
     
     handleAddToCart(button) {
@@ -141,6 +168,9 @@ class ShoppingCart {
       
       // Attach event listeners to the newly added quantity controls
       this.attachQuantityControlListeners();
+      
+      // Re-attach checkout button listener since we may have modified the DOM
+      this.attachCheckoutButtonListener();
     }
     
     attachQuantityControlListeners() {
@@ -233,31 +263,6 @@ class ShoppingCart {
   // Add CSS for quantity controls
   document.addEventListener('DOMContentLoaded', () => {
     const style = document.createElement('style');
-    style.textContent = `
-      .quantity-control {
-        display: flex;
-        align-items: center;
-        margin-top: 5px;
-      }
-      
-      .qty-btn {
-        width: 25px;
-        height: 25px;
-        background-color: #f0f0f0;
-        border: 1px solid #ccc;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-weight: bold;
-      }
-      
-      .cart-qty-input {
-        width: 40px;
-        text-align: center;
-        margin: 0 5px;
-      }
-    `;
     document.head.appendChild(style);
     
     // Create a global cart instance
@@ -265,4 +270,105 @@ class ShoppingCart {
     
     // Refresh product details from the server
     window.shoppingCart.refreshProductDetails();
+    
+    console.log('ShoppingCart initialized');
   });
+
+  // Intercept fetch requests to log them
+(function() {
+  console.log('Installing fetch debugger');
+  
+  // Store the original fetch function
+  const originalFetch = window.fetch;
+  
+  // Override fetch to log requests and handle errors better
+  window.fetch = async function(url, options) {
+    // Create a timestamp for this request
+    const timestamp = new Date().toISOString();
+    const requestId = Math.random().toString(36).substr(2, 9);
+    
+    // Log the request details
+    console.log(`[${timestamp}] Fetch request #${requestId} to: ${url}`);
+    console.log(`[${requestId}] Request options:`, options);
+    
+    // Try to extract line number where fetch was called
+    try {
+      throw new Error('Stack trace');
+    } catch (e) {
+      const stackLines = e.stack.split('\n');
+      // Look for the line that called our wrapped fetch
+      for (let i = 0; i < stackLines.length; i++) {
+        if (stackLines[i].includes('fetch') && !stackLines[i].includes('window.fetch')) {
+          console.log(`[${requestId}] Called from:`, stackLines[i].trim());
+          break;
+        }
+      }
+    }
+    
+    try {
+      // Call the original fetch function
+      const response = await originalFetch(url, options);
+      
+      // Clone the response so we can read it twice
+      const clonedResponse = response.clone();
+      
+      // Log response status
+      console.log(`[${requestId}] Response status: ${response.status} ${response.statusText}`);
+      
+      // Try to log response body if it's JSON
+      try {
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+          const jsonData = await clonedResponse.json();
+          console.log(`[${requestId}] Response JSON:`, jsonData);
+        }
+      } catch (bodyError) {
+        console.log(`[${requestId}] Could not parse response body: ${bodyError.message}`);
+      }
+      
+      return response;
+    } catch (error) {
+      // Log fetch errors
+      console.error(`[${requestId}] Fetch error:`, error);
+      throw error;
+    }
+  };
+  
+  console.log('Fetch debugger installed');
+})();
+
+// Add an event listener to all checkout buttons
+document.addEventListener('click', function(event) {
+  // Check if the clicked element is a checkout button
+  if (event.target.id === 'checkout-button' || 
+      event.target.classList.contains('checkout-btn') ||
+      (event.target.tagName === 'BUTTON' && event.target.textContent.includes('Checkout'))) {
+    
+    console.log('Checkout button clicked:', event.target);
+    
+    // Log the cart state
+    if (window.shoppingCart) {
+      console.log('Shopping cart items:', JSON.stringify(window.shoppingCart.items));
+    } else if (window.loadCart) {
+      console.log('Legacy cart items:', JSON.stringify(window.loadCart()));
+    }
+    
+    // Log form state
+    const form = document.getElementById('paypal-form');
+    if (form) {
+      console.log('PayPal form action:', form.action);
+      
+      // Log form inputs
+      const inputs = form.querySelectorAll('input');
+      const formData = {};
+      inputs.forEach(input => {
+        formData[input.name] = input.value;
+      });
+      console.log('Form inputs:', formData);
+    }
+    
+    // Log CSRF state
+    console.log('CSRF token in form:', document.getElementById('csrf-token')?.value);
+    console.log('CSRF token in localStorage:', localStorage.getItem('csrf_token'));
+  }
+});

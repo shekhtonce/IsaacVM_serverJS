@@ -65,6 +65,17 @@ class ShoppingCart {
         this.addItem(pid, name, price, 1);
         this.saveToStorage();
         this.updateDisplay();
+        
+        // Add pulse animation
+        const cartSummary = document.querySelector('.cart-summary');
+        if (cartSummary) {
+          cartSummary.classList.add('pulse');
+          
+          // Remove the class after animation completes
+          setTimeout(() => {
+            cartSummary.classList.remove('pulse');
+          }, 500);
+        }
       }
     }
     
@@ -140,12 +151,15 @@ class ShoppingCart {
       let htmlItems = '';
       
       if (this.items.length === 0) {
-        htmlItems = '<li>Your cart is empty.</li>';
+        htmlItems = '<li class="empty-cart">Your cart is empty.</li>';
       } else {
         this.items.forEach(item => {
           htmlItems += `
             <li>
-              ${item.name} @ $${item.price.toFixed(2)}
+              <div class="item-details">
+                <span class="item-name">${item.name}</span>
+                <span class="item-price">$${item.price.toFixed(2)}</span>
+              </div>
               <div class="quantity-control">
                 <button class="qty-btn qty-decrease" data-pid="${item.pid}">-</button>
                 <input 
